@@ -1,0 +1,99 @@
+MenuLeft                          = key left down
+MenuRight                         = key right down
+MenuUp                            = key up down
+MenuDown                          = key down down
+MenuActivate                      = key enter down
+MenuEscape                        = key esc down
+
+SkipMessage                       = key enter down
+SkipMessage                       = key esc down
+
+SkipCutscene                      = key enter down
+
+CameraLeft                        = key a pressed
+CameraRight                       = key d pressed
+CameraUp                          = key q pressed
+CameraDown                        = key e pressed
+CameraForwards                    = key w pressed
+CameraBackwards                   = key s pressed
+CameraZoom                        = key z pressed
+CameraDeZoom                      = key c pressed
+
+CameraZoom                        = mouse middle pressed
+
+TargetMove                        = mouse axes move
+TargetMoveZ                       = mouse wheel move
+CameraSpeedup                     = key shift pressed
+CameraSlowdown                    = mouse right pressed
+
+CameraDebugRotate                 = mouse right pressed
+
+UnitDeselect                      = key space down
+
+UnitCycleLeft                     = key openbrace down
+UnitCycleRight                    = key closebrace down
+
+UnitEndSetTarget                  = mouse left up
+UnitSetTarget                     = mouse left pressed && not mouse right pressed
+UnitPrimaryFireTarget             = mouse right pressed
+UnitSecondaryFireTarget           = mouse left down && mouse right pressed
+
+UnitCreate                        = mouse left down
+
+#WeaponCycleLeft                   = key left down
+#WeaponCycleRight                  = key right down
+
+TaskManagerSwitchTask             INPUT_TYPE_BOOL
+
+IconsTaskManagerDisplay           = key tab pressed
+IconsTaskManagerHide              = key tab up
+IconsTaskManagerEndTask           = key c down
+IconsChatLog                      = key l pressed
+
+ActivateTMButton                  = mouse left up
+ActivateTMButton                  = XInput a up
+
+EclipseLMouseDown                 = mouse left down
+EclipseLMousePressed              = mouse left pressed
+EclipseRMousePressed              = mouse right down
+ScrollSpeedup                     = key shift pressed
+
+SelectLocation                    = mouse left down
+LocationDragActive                = mouse left pressed
+DeselectLocation                  = mouse left up
+SelectLocation                    = XInput a down
+
+TileSelect                        = mouse left down
+TileDrop                          = mouse left up
+TileDrag                          = mouse left pressed
+
+FileMultiSelect                   = key control pressed
+
+DebugDropPacket                   = key f pressed
+
+TaskManagerSelectTask1            = key 1 down
+TaskManagerSelectTask2            = key 2 down
+TaskManagerSelectTask3            = key 3 down
+TaskManagerSelectTask4            = key 4 down
+TaskManagerSelectTask5            = key 5 down
+TaskManagerSelectTask6            = key 6 down
+TaskManagerSelectTask7            = key 7 down
+TaskManagerSelectTask8            = key 8 down
+TaskManagerSelectTask9            = key 9 down
+
+IconsTaskManagerNewSquad          = key f1 down
+IconsTaskManagerNewEngineer       = key f2 down
+IconsTaskManagerNewOfficer        = key f3 down
+IconsTaskManagerNewArmour         = key f4 down
+
+IconsTaskManagerSelectGrenade     = key f5 down
+IconsTaskManagerSelectRocket      = key f6 down
+IconsTaskManagerSelectAirStrike   = key f7 down
+IconsTaskManagerSelectController  = key f8 down
+
+CameraFreeMovement                = key f2 pressed
+
+DebugCameraFixUp                  = key g pressed
+
+GamePause                         = key pause down
+ToggleCheatMenu                   = key f11 down

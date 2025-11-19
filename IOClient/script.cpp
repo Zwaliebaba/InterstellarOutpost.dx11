@@ -1,0 +1,685 @@
+#include "pch.h"
+#include "Script.h"
+#include "GameApp.h"
+#include "camera.h"
+#include "global_world.h"
+#include "goddish.h"
+#include "hi_res_time.h"
+#include "level_file.h"
+#include "location.h"
+#include "main.h"
+#include "preferences.h"
+#include "Renderer.h"
+#include "resource.h"
+#include "rocket.h"
+#include "soundsystem.h"
+#include "taskmanager_interface.h"
+#include "text_stream_readers.h"
+
+Script::Script()
+  : m_in(nullptr),
+    m_waitUntil(-1.0f),
+    m_waitForSpeech(false),
+    m_waitForCamera(false),
+    m_waitForFade(false),
+    m_waitForPlayerNotBusy(false),
+    m_requestedLocationId(-1),
+    m_waitForRocket(false),
+    m_permitEscape(false) {}
+
+bool Script::IsRunningScript()
+{
+  return (m_in != nullptr);
+}
+
+void Script::RunCommand_CamCut(const char* _mountName)
+{
+  if (!g_app->m_location)
+    return;
+
+  bool mountFound = g_app->m_camera->SetTarget(_mountName);
+  DEBUG_ASSERT(mountFound);
+  g_app->m_camera->CutToTarget();
+}
+
+void Script::RunCommand_CamMove(const char* _mountName, float _duration)
+{
+  if (!g_app->m_location)
+    return;
+
+  if (g_app->m_camera->SetTarget(_mountName))
+  {
+    g_app->m_camera->SetMoveDuration(_duration);
+
+    g_app->m_camera->RequestMode(Camera::ModeMoveToTarget);
+  }
+}
+
+void Script::RunCommand_CamAnim(const char* _animName)
+{
+  if (!g_app->m_location)
+    return;
+
+  int animId = g_app->m_location->m_levelFile->GetCameraAnimId(_animName);
+  ASSERT_TEXT(animId != -1, "Invalid camera animation requested %s", _animName);
+  CameraAnimation* camAnim = g_app->m_location->m_levelFile->m_cameraAnimations[animId];
+  g_app->m_camera->PlayAnimation(camAnim);
+}
+
+void Script::RunCommand_CamFov(float _fov, bool _immediate)
+{
+  if (_immediate)
+    g_app->m_camera->SetFOV(_fov);
+  else
+    g_app->m_camera->SetTargetFOV(_fov);
+}
+
+void Script::RunCommand_CamBuildingFocus(int _buildingId, float _range, float _height)
+{
+  if (!g_app->m_location)
+    return;
+
+  Building* building = g_app->m_location->GetBuilding(_buildingId);
+
+  if (building)
+    g_app->m_camera->RequestBuildingFocusMode(building, _range, _height);
+  else
+    DebugTrace("SCRIPT ERROR : Tried to target non-existent building {}", _buildingId);
+}
+
+void Script::RunCommand_CamBuildingApproach(int _buildingId, float _range, float _height, float _duration)
+{
+  if (!g_app->m_location)
+    return;
+
+  Building* building = g_app->m_location->GetBuilding(_buildingId);
+
+  if (building)
+  {
+    g_app->m_camera->SetTarget(building->m_centerPos, _range, _height);
+    g_app->m_camera->SetMoveDuration(_duration);
+    g_app->m_camera->RequestMode(Camera::ModeMoveToTarget);
+  }
+  else
+    DebugTrace("SCRIPT ERROR : Tried to target non-existent building {}", _buildingId);
+}
+
+void Script::RunCommand_CamGlobalWorldFocus() { g_app->m_camera->RequestSphereFocusMode(); }
+
+void Script::RunCommand_LocationFocus(const char* _locationName, float _fov)
+{
+  if (g_app->m_location)
+    return;
+
+  LegacyVector3 targetPos;
+
+  if (_stricmp(_locationName, "heaven") == 0)
+    targetPos = g_zeroVector;
+  else
+  {
+    int locationId = g_app->m_globalWorld->GetLocationId(_locationName);
+    if (locationId == -1)
+      return;
+
+    targetPos = g_app->m_globalWorld->GetLocationPosition(locationId);
+  }
+
+  if (!g_app->m_camera->IsInMode(Camera::ModeSphereWorldScripted))
+    g_app->m_camera->RequestMode(Camera::ModeSphereWorldScripted);
+
+  g_app->m_camera->SetTargetFOV(_fov);
+  g_app->m_camera->SetTarget(targetPos, LegacyVector3(0, 0, 1), g_upVector);
+}
+
+void Script::RunCommand_CamReset()
+{
+  if (g_app->m_camera->IsAnimPlaying())
+    g_app->m_camera->StopAnimation();
+
+  if (g_app->m_location)
+    g_app->m_camera->RequestMode(Camera::ModeFreeMovement);
+  else
+    g_app->m_camera->RequestMode(Camera::ModeSphereWorld);
+}
+
+void Script::RunCommand_EnterLocation(char* _name)
+{
+  g_app->m_requestedLocationId = g_app->m_globalWorld->GetLocationId(_name);
+
+  m_requestedLocationId = g_app->m_requestedLocationId;
+
+  GlobalLocation* loc = g_app->m_globalWorld->GetLocation(g_app->m_requestedLocationId);
+  DEBUG_ASSERT(loc);
+
+  g_app->m_requestedMission = loc->m_missionFilename;
+  g_app->m_requestedMap = loc->m_mapFilename;
+}
+
+void Script::RunCommand_ExitLocation()
+{
+  g_app->m_requestedLocationId = -1;
+  g_app->m_requestedMission[0] = '\0';
+  g_app->m_requestedMap[0] = '\0';
+
+  m_requestedLocationId = g_app->m_requestedLocationId;
+}
+
+void Script::RunCommand_SetMission(std::string_view _locName, std::string_view _missionName)
+{
+  GlobalLocation* loc = g_app->m_globalWorld->GetLocation(_locName);
+  DEBUG_ASSERT(loc);
+  loc->m_missionFilename = _missionName;
+  loc->m_missionCompleted = false;
+}
+
+void Script::RunCommand_Say(char* _stringId) {}
+
+void Script::RunCommand_ShutUp() {}
+
+void Script::RunCommand_Wait(double _time) { m_waitUntil = std::max(m_waitUntil, GetHighResTime() + _time); }
+
+void Script::RunCommand_WaitSay() { m_waitForSpeech = true; }
+
+void Script::RunCommand_WaitCam() { m_waitForCamera = true; }
+
+void Script::RunCommand_WaitFade() { m_waitForFade = true; }
+
+void Script::RunCommand_WaitRocket(int _buildingId, char* _state, int _data)
+{
+  m_rocketId = _buildingId;
+  m_rocketState = EscapeRocket::GetStateId(_state);
+  m_rocketData = _data;
+  m_waitForRocket = true;
+}
+
+void Script::RunCommand_WaitPlayerNotBusy() { m_waitForPlayerNotBusy = true; }
+
+void Script::RunCommand_Highlight(int _buildingId) {}
+
+void Script::RunCommand_ClearHighlights() {}
+
+void Script::RunCommand_TriggerSound(const char* _event)
+{
+  char eventName[256];
+  sprintf(eventName, "Music %s", _event);
+
+  if (g_app->m_soundSystem->NumInstancesPlaying(WorldObjectId(), eventName) == 0)
+    g_app->m_soundSystem->TriggerOtherEvent(nullptr, _event, SoundSourceBlueprint::TypeMusic);
+}
+
+void Script::RunCommand_StopSound(const char* _event)
+{
+  char eventName[256];
+  sprintf(eventName, "Music %s", _event);
+  g_app->m_soundSystem->StopAllSounds(WorldObjectId(), eventName);
+}
+
+void Script::RunCommand_GiveResearch(const char* _name)
+{
+  int researchType = GlobalResearch::GetType((char*)_name);
+  if (researchType != -1)
+  {
+    g_app->m_globalWorld->m_research->AddResearch(researchType);
+    g_app->m_taskManagerInterface->SetCurrentMessage(TaskManagerInterface::MessageResearch, researchType, 4.0f);
+  }
+}
+
+void Script::RunCommand_RunCredits() {}
+
+void Script::RunCommand_GameOver()
+{
+  //
+  // Go into the outro camera mode
+
+  g_app->m_camera->RequestMode(Camera::ModeSphereWorldOutro);
+
+  //
+  // Kill global world ambiences
+
+  g_app->m_soundSystem->StopAllSounds(WorldObjectId(), "Ambience EnterGlobalWorld");
+}
+
+void Script::RunCommand_ResetResearch()
+{
+  m_darwinianResearchLevel = g_app->m_globalWorld->m_research->m_researchLevel[GlobalResearch::TypeDarwinian];
+  g_app->m_globalWorld->m_research->m_researchLevel[GlobalResearch::TypeDarwinian] = 1;
+}
+
+void Script::RunCommand_RestoreResearch()
+{
+  g_app->m_globalWorld->m_research->m_researchLevel[GlobalResearch::TypeDarwinian] = m_darwinianResearchLevel;
+}
+
+GodDish* GetGodDish()
+{
+  for (int i = 0; i < g_app->m_location->m_buildings.Size(); ++i)
+  {
+    if (g_app->m_location->m_buildings.ValidIndex(i))
+    {
+      Building* building = g_app->m_location->m_buildings[i];
+      if (building && building->m_buildingType == BuildingType::TypeGodDish)
+      {
+        auto dish = static_cast<GodDish*>(building);
+        return dish;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+void Script::RunCommand_GodDishActivate()
+{
+  GodDish* dish = GetGodDish();
+  if (dish)
+    dish->Activate();
+}
+
+void Script::RunCommand_GodDishDeactivate()
+{
+  GodDish* dish = GetGodDish();
+  if (dish)
+    dish->DeActivate();
+}
+
+void Script::RunCommand_GodDishSpawnSpam()
+{
+  GodDish* dish = GetGodDish();
+  if (dish)
+    dish->SpawnSpam(false);
+}
+
+void Script::RunCommand_GodDishSpawnResearch()
+{
+  GodDish* dish = GetGodDish();
+  if (dish)
+    dish->SpawnSpam(true);
+}
+
+void Script::RunCommand_SpamTrigger()
+{
+  GodDish* dish = GetGodDish();
+  if (dish)
+    dish->TriggerSpam();
+}
+
+void Script::RunCommand_PurityControl() {}
+
+void Script::RunCommand_ShowDarwinLogo()
+{
+}
+
+void Script::RunCommand_ShowDemoEndSequence() {}
+
+void Script::RunCommand_PermitEscape() { m_permitEscape = true; }
+
+void Script::RunCommand_DestroyBuilding(int _buildingId, float _intensity)
+{
+  Building* b = g_app->m_location->GetBuilding(_buildingId);
+  if (b)
+    b->Destroy(_intensity);
+}
+
+void Script::RunCommand_ActivateTrunkPort(int _buildingId, bool _fullActivation)
+{
+  Building* b = g_app->m_location->GetBuilding(_buildingId);
+  if (b && b->m_buildingType == BuildingType::TypeTrunkPort)
+  {
+    if (_fullActivation)
+      b->ReprogramComplete();
+    else
+    {
+      GlobalBuilding* gb = g_app->m_globalWorld->GetBuilding(b->m_id.GetUniqueId(), g_app->m_locationId);
+      gb->m_online = true;
+    }
+  }
+}
+
+// Opens a script file and returns. The script will only actually be run when
+// Script::Advance gets called
+void Script::RunScript(std::string_view _filename)
+{
+  // Run a script, speficied by filename
+  std::string fullFilename = "scripts\\" + std::string(_filename);
+  m_in = Resource::GetTextReader(fullFilename);
+  DEBUG_ASSERT(m_in);
+}
+
+bool Script::Skip()
+{
+  m_waitUntil = g_gameTime;
+  m_waitForCamera = false;
+  m_waitForRocket = false;
+  m_waitForPlayerNotBusy = false;
+
+  if (m_permitEscape)
+  {
+    // Quick exit the entire cutscene
+    delete m_in;
+    m_in = nullptr;
+
+    g_app->m_soundSystem->StopAllSounds(WorldObjectId(), "Music");
+    m_permitEscape = false;
+    if (g_app->m_location)
+      g_app->m_camera->RequestMode(Camera::ModeFreeMovement);
+    else
+      g_app->m_camera->RequestMode(Camera::ModeSphereWorld);
+    return true;
+  }
+
+  return false;
+}
+
+void Script::Advance()
+{
+  if (m_permitEscape)
+    g_app->m_taskManagerInterface->SetVisible(false);
+
+  if (m_waitForFade && !g_app->m_renderer->IsFadeComplete())
+    return;
+  if (m_waitUntil > g_gameTime)
+    return;
+  if (m_waitForCamera && g_app->m_camera->IsAnimPlaying())
+    return;
+
+  if (m_waitForRocket)
+  {
+    auto rocket = static_cast<EscapeRocket*>(g_app->m_location->GetBuilding(m_rocketId));
+    if (!rocket || rocket->m_buildingType != BuildingType::TypeEscapeRocket)
+    {
+      m_waitForRocket = false;
+      return;
+    }
+
+    if (rocket->m_state < m_rocketState)
+      return;
+
+    if (rocket->m_state == m_rocketState && m_rocketState == EscapeRocket::StateCountdown && static_cast<int>(rocket->m_countdown) >
+      m_rocketData)
+      return;
+  }
+
+  if (m_requestedLocationId != -1)
+  {
+    if (g_app->m_locationId != m_requestedLocationId)
+      return;
+    m_requestedLocationId = -1;
+  }
+
+  m_waitForSpeech = false;
+  m_waitForCamera = false;
+  m_waitForFade = false;
+  m_waitForRocket = false;
+  m_waitForPlayerNotBusy = false;
+
+  if (m_in)
+  {
+    if (m_in->ReadLine())
+      AdvanceScript();
+    else
+    {
+      delete m_in;
+      m_in = nullptr;
+      m_permitEscape = false;
+    }
+  }
+}
+
+void Script::AdvanceScript()
+{
+  if (!m_in->TokenAvailable())
+    return;
+
+  int opCode = GetOpCode(m_in->GetNextToken());
+  char* nextWord = nullptr;
+  float nextFloat = 0.0f;
+  if (m_in->TokenAvailable())
+  {
+    nextWord = m_in->GetNextToken();
+    nextFloat = atof(nextWord);
+  }
+
+  switch (opCode)
+  {
+    case OpCamMove:
+    {
+      float duration = atof(m_in->GetNextToken());
+      RunCommand_CamMove(nextWord, duration);
+      break;
+    }
+    case OpCamCut:
+      RunCommand_CamCut(nextWord);
+      break;
+    case OpCamAnim:
+      RunCommand_CamAnim(nextWord);
+      break;
+    case OpCamFov:
+    {
+      int immediate = m_in->TokenAvailable() ? atoi(m_in->GetNextToken()) : true;
+      RunCommand_CamFov(nextFloat, immediate);
+      break;
+    }
+
+    case OpCamBuildingFocus:
+    {
+      float range = atof(m_in->GetNextToken());
+      float height = atof(m_in->GetNextToken());
+      RunCommand_CamBuildingFocus(static_cast<int>(nextFloat), range, height);
+      break;
+    }
+
+    case OpCamBuildingApproach:
+    {
+      float range = atof(m_in->GetNextToken());
+      float height = atof(m_in->GetNextToken());
+      float duration = atof(m_in->GetNextToken());
+      RunCommand_CamBuildingApproach(static_cast<int>(nextFloat), range, height, duration);
+      break;
+    }
+
+    case OpCamLocationFocus:
+    {
+      float fov = atof(m_in->GetNextToken());
+      RunCommand_LocationFocus(nextWord, fov);
+      break;
+    }
+
+    case OpCamGlobalWorldFocus:
+    {
+      RunCommand_CamGlobalWorldFocus();
+      break;
+    }
+
+    case OpCamReset:
+      RunCommand_CamReset();
+      break;
+
+    case OpEnterLocation:
+      RunCommand_EnterLocation(nextWord);
+      break;
+    case OpExitLocation:
+      RunCommand_ExitLocation();
+      break;
+
+    case OpSay:
+      RunCommand_Say(nextWord);
+      break;
+    case OpShutUp:
+      RunCommand_ShutUp();
+      break;
+    case OpWait:
+      RunCommand_Wait(nextFloat);
+      break;
+    case OpWaitSay:
+      RunCommand_WaitSay();
+      break;
+    case OpWaitCam:
+      RunCommand_WaitCam();
+      break;
+    case OpWaitFade:
+      RunCommand_WaitFade();
+      break;
+
+    case OpWaitRocket:
+    {
+      char* state = m_in->GetNextToken();
+      int data = atoi(m_in->GetNextToken());
+      RunCommand_WaitRocket(static_cast<int>(nextFloat), state, data);
+      break;
+    }
+
+    case OpWaitPlayerNotBusy:
+      RunCommand_WaitPlayerNotBusy();
+      break;
+
+    case OpHighlight:
+      RunCommand_Highlight(static_cast<int>(nextFloat));
+      break;
+    case OpClearHighlights:
+      RunCommand_ClearHighlights();
+      break;
+
+    case OpTriggerSound:
+      RunCommand_TriggerSound(nextWord);
+      break;
+    case OpStopSound:
+      RunCommand_StopSound(nextWord);
+      break;
+
+      case OpGiveResearch:
+      RunCommand_GiveResearch(nextWord);
+      break;
+
+    case OpSetMission:
+    {
+      char* missionName = m_in->GetNextToken();
+      RunCommand_SetMission(nextWord, missionName);
+      break;
+    }
+
+    case OpResetResearch:
+      RunCommand_ResetResearch();
+      break;
+    case OpRestoreResearch:
+      RunCommand_RestoreResearch();
+      break;
+
+    case OpGameOver:
+      RunCommand_GameOver();
+      break;
+    case OpRunCredits:
+      RunCommand_RunCredits();
+      break;
+
+    case OpSetCutsceneMode:
+    {
+      int cutsceneMode = atoi(nextWord);
+      break;
+    }
+
+    case OpGodDishActivate:
+      RunCommand_GodDishActivate();
+      break;
+    case OpGodDishDeactivate:
+      RunCommand_GodDishDeactivate();
+      break;
+    case OpGodDishSpawnSpam:
+      RunCommand_GodDishSpawnSpam();
+      break;
+    case OpGodDishSpawnResearch:
+      RunCommand_GodDishSpawnResearch();
+      break;
+    case OpTriggerSpam:
+      RunCommand_SpamTrigger();
+      break;
+    case OpPurityControl:
+      RunCommand_PurityControl();
+      break;
+
+    case OpShowDarwinLogo:
+      RunCommand_ShowDarwinLogo();
+      break;
+    case OpShowDemoEndSequence:
+      RunCommand_ShowDemoEndSequence();
+      break;
+
+    case OpPermitEscape:
+      RunCommand_PermitEscape();
+      break;
+
+    case OpDestroyBuilding:
+    {
+      float intensity = atof(m_in->GetNextToken());
+      RunCommand_DestroyBuilding(static_cast<int>(nextFloat), intensity);
+      break;
+    }
+
+    case OpActivateTrunkPort:
+    case OpActivateTrunkPortFull:
+    {
+      RunCommand_ActivateTrunkPort(static_cast<int>(nextFloat), opCode == OpActivateTrunkPortFull);
+      break;
+    }
+
+    default: DEBUG_ASSERT(false);
+      break;
+  }
+}
+
+static const char* g_opCodeNames[] = {
+  "CamCut",
+  "CamMove",
+  "CamAnim",
+  "CamFov",
+  "CamBuildingFocus",
+  "CamBuildingApproach",
+  "CamLocationFocus",
+  "CamGlobalWorldFocus",
+  "CamReset",
+  "EnterLocation",
+  "ExitLocation",
+  "Say",
+  "ShutUp",
+  "Wait",
+  "WaitSay",
+  "WaitCam",
+  "WaitFade",
+  "WaitRocket",
+  "WaitPlayerNotBusy",
+  "Highlight",
+  "ClearHighlights",
+  "TriggerSound",
+  "StopSound",
+  "GiveResearch",
+  "SetMission",
+  "GameOver",
+  "ResetResearch",
+  "RestoreResearch",
+  "RunCredits",
+  "SetCutsceneMode",
+  "GodDishActivate",
+  "GodDishDeactivate",
+  "GodDishSpawnSpam",
+  "GodDishSpawnResearch",
+  "TriggerSpam",
+  "PurityControl",
+  "ShowDarwinLogo",
+  "ShowDemoEndSequence",
+  "PermitEscape",
+  "DestroyBuilding",
+  "ActivateTrunkPort",
+  "ActivateTrunkPortFull"
+};
+
+int Script::GetOpCode(const char* _word)
+{
+  static_assert(sizeof(g_opCodeNames) / sizeof(char*) == OpNumOps, "OpCode list is incorrect");
+
+  for (unsigned int i = 0; i < OpNumOps; ++i)
+  {
+    if (_stricmp(_word, g_opCodeNames[i]) == 0)
+      return i;
+  }
+
+  return -1;
+}

@@ -1,0 +1,243 @@
+#include "pch.h"
+#include "bridge.h"
+#include "GameApp.h"
+#include "entity_grid.h"
+#include "location.h"
+#include "math_utils.h"
+#include "resource.h"
+#include "shape.h"
+#include "team.h"
+#include "text_stream_readers.h"
+
+Bridge::Bridge()
+  : Teleport(BuildingType::TypeBridge),
+    m_nextBridgeId(-1),
+    m_status(0.0f),
+    m_signal(nullptr),
+    m_beingOperated(false)
+{
+  m_sendPeriod = BRIDGE_TRANSPORTPERIOD;
+
+  m_shapes[0] = Resource::GetShape("bridgeend.shp");
+  m_shapes[1] = Resource::GetShape("bridgetower.shp");
+
+  DEBUG_ASSERT(m_shapes[0]);
+  DEBUG_ASSERT(m_shapes[1]);
+
+  SetBridgeType(BridgeTypeTower);
+}
+
+void Bridge::Initialize(Building* _template)
+{
+  Teleport::Initialize(_template);
+
+  m_nextBridgeId = static_cast<Bridge*>(_template)->m_nextBridgeId;
+  m_status = static_cast<Bridge*>(_template)->m_status;
+  SetBridgeType(static_cast<Bridge*>(_template)->m_bridgeType);
+}
+
+void Bridge::SetBridgeType(int _type)
+{
+  m_bridgeType = _type;
+  SetShape(m_shapes[m_bridgeType]);
+
+  m_signal = m_shape->m_rootFragment->LookupMarker("MarkerSignal");
+  DEBUG_ASSERT(m_signal);
+}
+
+void Bridge::Render(float predictionTime)
+{
+  //
+  // Render our shape
+
+  Matrix34 mat(m_front, g_upVector, m_pos);
+  m_shape->Render(predictionTime, mat);
+}
+
+void Bridge::RenderAlphas(float predictionTime)
+{
+  //
+  // Render our signal
+
+  if (m_nextBridgeId != -1)
+  {
+    Building* building = g_app->m_location->GetBuilding(m_nextBridgeId);
+    if (building && building->m_buildingType == BuildingType::TypeBridge)
+    {
+      auto bridge = static_cast<Bridge*>(building);
+      if (m_status > 0.0f && bridge->m_status > 0.0f)
+      {
+        LegacyVector3 ourPos = GetStartPoint();
+        LegacyVector3 theirPos = bridge->GetStartPoint();
+
+        if (m_id.GetTeamId() == 255)
+          glColor4f(0.5f, 0.5f, 0.5f, m_status / 100.0f);
+        else
+        {
+          RGBAColor col = g_app->m_location->m_teams[m_id.GetTeamId()].m_colour;
+          glColor4ub(col.r, col.g, col.b, static_cast<unsigned char>(255.0f * m_status / 100.0f));
+        }
+
+        glEnable(GL_BLEND);
+        glEnable(GL_LINE_SMOOTH);
+        glBegin(GL_LINES);
+        glVertex3fv(ourPos.GetData());
+        glVertex3fv(theirPos.GetData());
+        glEnd();
+        glDisable(GL_LINE_SMOOTH);
+        glDisable(GL_BLEND);
+      }
+    }
+  }
+
+  Teleport::RenderAlphas(predictionTime);
+}
+
+bool Bridge::Advance()
+{
+  if (m_status < 0.0f)
+    return true;
+
+  if (m_beingOperated)
+    m_status = 100.0f;
+  else
+    m_status = 0.0f;
+
+  return Teleport::Advance();
+}
+
+bool Bridge::GetAvailablePosition(LegacyVector3& _pos, LegacyVector3& _front)
+{
+  Matrix34 ourMat(m_front, g_upVector, m_pos);
+  Matrix34 ourEngineer = m_signal->GetWorldMatrix(ourMat);
+  _pos = ourEngineer.pos;
+  _front = ourEngineer.f;
+
+  return (!m_beingOperated);
+}
+
+void Bridge::BeginOperation() { m_beingOperated = true; }
+
+void Bridge::EndOperation() { m_beingOperated = false; }
+
+int Bridge::GetBuildingLink() { return m_nextBridgeId; }
+
+void Bridge::SetBuildingLink(int _buildingId) { m_nextBridgeId = _buildingId; }
+
+void Bridge::Read(TextReader* _in, bool _dynamic)
+{
+  Building::Read(_in, _dynamic);
+
+  char* word = _in->GetNextToken();
+  m_nextBridgeId = atoi(word);
+
+  word = _in->GetNextToken();
+  m_bridgeType = atoi(word);
+  SetBridgeType(m_bridgeType);
+}
+
+bool Bridge::ReadyToSend()
+{
+  Building* nextBridge = g_app->m_location->GetBuilding(m_nextBridgeId);
+  return (m_status > 0.0f && nextBridge && m_bridgeType == BridgeTypeEnd && nextBridge->m_buildingType == BuildingType::TypeBridge &&
+    Teleport::ReadyToSend());
+}
+
+LegacyVector3 Bridge::GetStartPoint()
+{
+  Matrix34 ourMat(m_front, g_upVector, m_pos);
+  Matrix34 ourSignal = m_signal->GetWorldMatrix(ourMat);
+  return ourSignal.pos;
+}
+
+LegacyVector3 Bridge::GetEndPoint()
+{
+  auto nextBridge = this;
+  while (nextBridge->m_nextBridgeId != -1)
+    nextBridge = static_cast<Bridge*>(g_app->m_location->GetBuilding(nextBridge->m_nextBridgeId));
+
+  if (!nextBridge)
+    return g_zeroVector;
+
+  LegacyVector3 theirPos = nextBridge->GetStartPoint();
+
+  return theirPos;
+}
+
+bool Bridge::GetExit(LegacyVector3& _pos, LegacyVector3& _front)
+{
+  auto nextBridge = this;
+  while (nextBridge->m_nextBridgeId != -1)
+    nextBridge = static_cast<Bridge*>(g_app->m_location->GetBuilding(nextBridge->m_nextBridgeId));
+
+  if (!nextBridge)
+    return false;
+
+  Matrix34 theirMat(nextBridge->m_front, g_upVector, nextBridge->m_pos);
+  Matrix34 theirEntrance = nextBridge->m_entrance->GetWorldMatrix(theirMat);
+
+  _pos = theirEntrance.pos;
+  _front = theirEntrance.f;
+
+  return true;
+}
+
+bool Bridge::UpdateEntityInTransit(Entity* _entity)
+{
+  Building* building = g_app->m_location->GetBuilding(m_nextBridgeId);
+  auto nextBridge = static_cast<Bridge*>(building);
+
+  WorldObjectId id(_entity->m_id);
+
+  if (m_status > 0.0f && nextBridge && nextBridge->m_buildingType == BuildingType::TypeBridge && nextBridge->m_status > 0.0f)
+  {
+    Matrix34 theirMat(nextBridge->m_front, g_upVector, nextBridge->m_pos);
+    Matrix34 theirSignal = nextBridge->m_signal->GetWorldMatrix(theirMat);
+    LegacyVector3 offset = (theirSignal.pos - _entity->m_pos).Normalize();
+    float dist = (_entity->m_pos - theirSignal.pos).Mag();
+    bool arrived = false;
+
+    _entity->m_vel = offset * BRIDGE_TRANSPORTSPEED;
+    if (_entity->m_vel.Mag() * SERVER_ADVANCE_PERIOD > dist)
+    {
+      _entity->m_vel = (_entity->m_pos - theirSignal.pos) / SERVER_ADVANCE_PERIOD;
+      arrived = true;
+    }
+
+    _entity->m_pos += _entity->m_vel * SERVER_ADVANCE_PERIOD;
+    _entity->m_onGround = false;
+    _entity->m_enabled = false;
+
+    if (arrived)
+    {
+      // We are there
+      if (nextBridge->m_bridgeType == BridgeTypeEnd)
+      {
+        LegacyVector3 exitPos, exitFront;
+        nextBridge->GetExit(exitPos, exitFront);
+        _entity->m_pos = exitPos;
+        _entity->m_front = exitFront;
+        _entity->m_enabled = true;
+        _entity->m_onGround = true;
+        _entity->m_vel.Zero();
+
+        g_app->m_location->m_entityGrid->AddObject(id, _entity->m_pos.x, _entity->m_pos.z, _entity->m_radius);
+        return true;
+      }
+      if (nextBridge->m_bridgeType == BridgeTypeTower)
+      {
+        nextBridge->EnterTeleport(id, true);
+        return true;
+      }
+    }
+
+    return false;
+  }
+  // Shit - we lost the carrier signal, so we die
+  _entity->ChangeHealth(-500);
+  _entity->m_enabled = true;
+  _entity->m_vel = LegacyVector3(syncsfrand(10.0f), syncfrand(10.0f), syncsfrand(10.0f));
+
+  g_app->m_location->m_entityGrid->AddObject(id, _entity->m_pos.x, _entity->m_pos.z, _entity->m_radius);
+  return true;
+}

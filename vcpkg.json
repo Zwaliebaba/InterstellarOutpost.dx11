@@ -1,0 +1,12 @@
+{
+   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json", 
+  "name": "interstellaroutpost",
+  "description": "Interstellar Outpost - Real-time strategy game with DirectX 12",
+  "version-string": "1.0.0",
+  "builtin-baseline": "0804e3b55b7e435c593707071052363fa876f170",
+  "dependencies": [
+    "winpixevent",
+    "cppwinrt"
+  ],
+  "overrides": []
+}

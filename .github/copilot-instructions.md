@@ -1,0 +1,24 @@
+## Copilot Instructions – InterstellarOutpost
+- **Stack**: C++23, MSVC, DirectX 12, CMake+Ninja; vcpkg manifest (`cppwinrt`, `winpixevent`) is auto-applied through the presets, so never run `vcpkg install` manually.
+- **Targets**: `IOClient` (WinMain client) and `IOServer` (console server) link `NeuronCore` → `NeuronClient`/`NeuronServer` → `GameLogic`. Gameplay belongs in `GameLogic`, rendering/input/audio in `NeuronClient`, networking/authority in `NeuronServer`, and cross-cutting utilities in `NeuronCore`.
+- **Build workflow**: `cmake --preset x64-debug` then `cmake --build --preset x64-debug`; artifacts land in `bin/Client/<config>` and `bin/Server/<config>`, while libraries live under `build/<preset>/libs`. Use the provided `x64-release` / `arm64-*` presets instead of ad-hoc toolchains.
+- **Project layout**: `cmake/StandardProjectSettings.cmake` normalizes output dirs and enables folders in IDEs—avoid overriding `CMAKE_RUNTIME_OUTPUT_DIRECTORY` in leaf targets.
+- **Options**: Root `CMakeLists.txt` exposes `ENABLE_PCH`, `ENABLE_PIX_PROFILING`, `ENABLE_CODE_ANALYSIS`, `BUILD_TESTING`, `BUILD_FUZZING`, etc. Add new toggles here and propagate via cache vars rather than sprinkling `#ifdef`s.
+- **ApplyTargetDefaults + EnablePch**: Every target should pass through these helpers so compiler switches, Unicode defines, and precompiled headers remain consistent. When adding a TU, include the target’s `pch.h` first.
+- **PCH discipline**: The PCH is the first include in every `.cpp`; failing to do so breaks shared compilation switches and will explode compile times.
+- **Determinism**: Simulation is lockstep between client/server. Avoid `std::random_device`, wall-clock timing, and thread-scheduled side effects inside `GameLogic`; keep RNG seeds/tick counters in serialized state so replays stay bit-identical.
+- **Subsystem boundaries**: Rendering/input/audio code calls into gameplay via clean interfaces; networking code returns commands/states back to gameplay. If logic would run on both client and server, place it in `GameLogic` and expose data-only structs under `NeuronCore`.
+- **Win32 hygiene**: `NeuronCore` already defines `WIN32_LEAN_AND_MEAN`, `NOMINMAX`, and imports Winsock/WinRT headers. Reuse those includes and prefer `winrt::com_ptr`/smart pointers over raw COM management.
+- **RAII everywhere**: COM ownership should go through `winrt::com_ptr` or smart pointers; avoid manual `Release` or naked `new/delete` in per-frame code.
+- **Data/Assets**: Stage runtime data beneath `IOClient/GameData` or `IOServer/GameData`. `cmake/InstallConfig.cmake` installs these folders and the NSIS generator expects binaries inside `bin/Client` and `bin/Server` for shortcut creation.
+- **Testing**: `tests/` activates only with `-DBUILD_TESTING=ON`, after which `ctest --preset x64-debug` runs suites. Mirror MSVC/CTest style if you add deterministic logic tests.
+- **Coding conventions**: `.clang-tidy` enforces CamelCase types, `m_member` fields, `_param` parameters, and discourages magic numbers. Follow these rather than disabling checks.
+- **Performance patterns**: Favor data-oriented layouts, cache-friendly spans, and `reserve` on hot vectors. Avoid heap work in per-frame/per-tick loops and leverage DirectX instancing when spawning many similar units.
+- **Serialization/networking**: Any message changes must keep backward compatibility between apps—version payloads, update both sides, and document expectations near the structs.
+- **Globbing**: Targets use `file(GLOB *.cpp)`; rerun CMake (or touch the preset) whenever you add a new source so Ninja regenerates correctly.
+- **Packaging**: `cpack -G NSIS` is configured to ship client and server with optional desktop shortcuts. Place new runtime DLLs/assets inside the respective `bin` subfolders or extend `install()` rules alongside existing ones.
+- **Unicode**: `_UNICODE`/`UNICODE` are defined globally, so prefer wide Win32 APIs and UTF-8 conversions at the edges; do not introduce ANSI-only code paths.
+- **Troubleshooting**: If PIX SDK is unavailable, configure with `-DENABLE_PIX_PROFILING=OFF`; enable `/analyze` via `-DENABLE_CODE_ANALYSIS=ON` rather than editing compiler flags inside targets.
+- **Debugger comfort**: App targets already set `VS_DEBUGGER_WORKING_DIRECTORY` to their respective `bin/...` folders—write relative file paths assuming that cwd.
+- **Process**: Keep engine/game layers clean, explain "why" for non-obvious constants, and extend existing modules before introducing new globals or singletons.
+- **Code Review**: Ensure new code adheres to established patterns, passes all tests, and includes comments for complex logic or design decisions. Provide brutally honest feedback on code quality, design, and potential improvements as needed.
