@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="InterstellarOutpost/InterstellarOutpost.vcxproj" />
+  <Project Path="InterstellarOutpost/InterstellarOutpost.vcxproj" Id="68ec9b35-ee8d-4bb4-927c-d1cc2cfdd1aa" />
 </Solution>
